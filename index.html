@@ -337,7 +337,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     <div class="how">
       <div class="step"><div class="n">1</div><div class="st">Upload the report</div><div class="sd">Use the file Zoom gives you under Registration → Export. We auto-detect the attendee table.</div></div>
       <div class="step"><div class="n">2</div><div class="st">Map · clean · dedupe</div><div class="sd">First + last name, email and 10-digit phone are folded into each link, then duplicate contacts are removed.</div></div>
-      <div class="step"><div class="n">3</div><div class="st">Download (auto-split)</div><div class="sd">Get a WATI-ready CSV. If it tops 2 MB it's split into numbered parts and zipped for you.</div></div>
+      <div class="step"><div class="n">3</div><div class="st">Download (auto-split)</div><div class="sd">Get a WATI-ready CSV. If it tops 2 MB it's split into numbered parts, each downloaded separately.</div></div>
     </div>
   </div>
 
@@ -364,7 +364,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       <div class="tbl-foot" id="tblFoot"></div>
     </div>
 
-    <div class="note"><span class="nic">ℹ</span><span><b style="color:var(--text)">Auto-split:</b> any WATI download over 2 MB is split into numbered parts (<span style="font-family:var(--mono)">…_part1.csv</span>, <span style="font-family:var(--mono)">_part2.csv</span>) and delivered as a single zip. Each part keeps the header row, so you can import them into WATI one by one. Smaller files download as a normal CSV. The Phone column is plain text — if Excel shows <span style="font-family:var(--mono)">9.3E+09</span>, that's display only; the file data is correct.</span></div>
+    <div class="note"><span class="nic">ℹ</span><span><b style="color:var(--text)">Auto-split:</b> any WATI download over 2 MB is split into numbered parts (<span style="font-family:var(--mono)">…_part1.csv</span>, <span style="font-family:var(--mono)">_part2.csv</span>) and each part downloads directly as its own CSV file — no zip. Each part keeps the header row, so you can import them into WATI one by one. Smaller files download as a normal CSV. The Phone column is plain text — if Excel shows <span style="font-family:var(--mono)">9.3E+09</span>, that's display only; the file data is correct.</span></div>
   </div>
 
   <footer>built for House of EdTech · zoom → google form prefill → wati</footer>
@@ -729,16 +729,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       return;
     }
     const files = parts.map((content,i)=>({ name: baseName + '_part' + (i+1) + '.csv', content: '\ufeff'+content }));
-    if(typeof JSZip !== 'undefined'){
-      const zip = new JSZip();
-      files.forEach(f=>zip.file(f.name, f.content));
-      zip.generateAsync({type:'blob'}).then(blob=>{
-        triggerDownload(blob, baseName + '_' + parts.length + '_parts.zip');
-        showToast(label + ' split into ' + parts.length + ' parts · zipped');
-      }).catch(()=>seqDownload(files, label, parts.length));
-    } else {
-      seqDownload(files, label, parts.length);
-    }
+    seqDownload(files, label, parts.length);
   }
   // fallback: download each part one after another
   function seqDownload(files, label, n){
