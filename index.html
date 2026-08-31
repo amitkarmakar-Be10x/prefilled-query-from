@@ -316,11 +316,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     <div class="pane active" id="pane-upload">
       <div class="drop" id="drop">
-        <input type="file" id="file" accept=".csv,text/csv" hidden>
+        <input type="file" id="file" accept=".csv,text/csv" multiple hidden>
         <div class="ic">📄</div>
-        <div class="big">Drop your Zoom registration CSV here</div>
-        <div class="small">or click to browse</div>
-        <div class="file-types">registration_xxxxxxxxx.csv · exported from Zoom</div>
+        <div class="big">Drop your Zoom registration CSV(s) here</div>
+        <div class="small">or click to browse · multiple files allowed</div>
+        <div class="file-types">registration_xxxxxxxxx.csv · exported from Zoom · select or drop several at once</div>
       </div>
     </div>
 
@@ -335,8 +335,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     <div class="err" id="err"></div>
 
     <div class="how">
-      <div class="step"><div class="n">1</div><div class="st">Upload the report</div><div class="sd">Use the file Zoom gives you under Registration → Export. We auto-detect the attendee table.</div></div>
-      <div class="step"><div class="n">2</div><div class="st">Map · clean · dedupe</div><div class="sd">First + last name, email and 10-digit phone are folded into each link, then duplicate contacts are removed.</div></div>
+      <div class="step"><div class="n">1</div><div class="st">Upload the report(s)</div><div class="sd">Use the file(s) Zoom gives you under Registration → Export. You can select or drop multiple CSVs at once — they're merged into one list. We auto-detect the attendee table in each.</div></div>
+      <div class="step"><div class="n">2</div><div class="st">Map · clean · dedupe</div><div class="sd">First + last name, email and 10-digit phone are folded into each link, then duplicate contacts are removed across all uploaded files combined.</div></div>
       <div class="step"><div class="n">3</div><div class="st">Download (auto-split)</div><div class="sd">Get a WATI-ready CSV. If it tops 2 MB it's split into numbered parts, each downloaded separately.</div></div>
     </div>
   </div>
@@ -364,7 +364,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       <div class="tbl-foot" id="tblFoot"></div>
     </div>
 
-    <div class="note"><span class="nic">ℹ</span><span><b style="color:var(--text)">Auto-split:</b> any WATI download over 2 MB is split into numbered parts (<span style="font-family:var(--mono)">…_part1.csv</span>, <span style="font-family:var(--mono)">_part2.csv</span>) and each part downloads directly as its own CSV file — no zip. Each part keeps the header row, so you can import them into WATI one by one. Smaller files download as a normal CSV. The Phone column is plain text — if Excel shows <span style="font-family:var(--mono)">9.3E+09</span>, that's display only; the file data is correct.</span></div>
+    <div class="note"><span class="nic">ℹ</span><span><b style="color:var(--text)">Multiple files:</b> drop or select several Zoom registration CSVs at once (e.g. exports from different sessions/dates) — they're parsed and merged into a single combined list, with duplicate contacts removed across all of them. <b style="color:var(--text)">Auto-split:</b> any WATI download over 2 MB is split into numbered parts (<span style="font-family:var(--mono)">…_part1.csv</span>, <span style="font-family:var(--mono)">_part2.csv</span>) and each part downloads directly as its own CSV file — no zip. Each part keeps the header row, so you can import them into WATI one by one. Smaller files download as a normal CSV. The Phone column is plain text — if Excel shows <span style="font-family:var(--mono)">9.3E+09</span>, that's display only; the file data is correct.</span></div>
   </div>
 
   <footer>built for House of EdTech · zoom → google form prefill → wati</footer>
@@ -467,7 +467,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   // ---------- CSV parsing (robust to Zoom's metadata header) ----------
-  function parseReport(text){
+  // `shared` (optional) = { seenKey } — pass the SAME Set across multiple files
+  // to dedupe registrants across the whole combined upload, not just per-file.
+  function parseReport(text, shared){
     const res = Papa.parse(text, {skipEmptyLines:'greedy'});
     const rows = res.data;
     if(!rows || !rows.length) throw new Error('That file looks empty.');
@@ -528,7 +530,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if(!c.base){ throw new Error('Form base URL is empty — open Form settings and paste your Google Form prefill link.'); }
 
     const out = [];
-    const seenKey = new Set();
+    const seenKey = (shared && shared.seenKey) ? shared.seenKey : new Set();
     let removed = 0;
     let scanned = 0;
     for(let r=headerIdx+1; r<rows.length; r++){
@@ -765,39 +767,102 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   });
 
   // ---------- run ----------
+  function finalize(records, meta, removed, scanned){
+    RECORDS = records; META = meta; REMOVED = removed||0; SCANNED = scanned||0;
+    renderMeta(); renderStats(); renderTable();
+    results.classList.add('show');
+    results.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+
+  // single block of pasted CSV text (Paste tab)
   function run(text){
     clearError();
     try{
       const { records, meta, removed, scanned } = parseReport(text);
-      RECORDS = records; META = meta; REMOVED = removed||0; SCANNED = scanned||0;
-      renderMeta(); renderStats(); renderTable();
-      results.classList.add('show');
-      results.scrollIntoView({behavior:'smooth', block:'start'});
+      finalize(records, meta, removed, scanned);
     }catch(e){
       results.classList.remove('show');
       showError(e.message || 'Something went wrong parsing the file.');
     }
   }
 
-  function handleFile(file){
-    if(!file) return;
-    if(!/\.csv$/i.test(file.name) && file.type!=='text/csv'){
-      showError('Please use a .csv file exported from Zoom.'); return;
+  // one or more uploaded/dropped files — merges registrants across all of them,
+  // de-duping across the combined set (not just within each individual file)
+  function runFiles(fileTexts){
+    clearError();
+    const seenKey = new Set();
+    let allRecords = [];
+    let totalRemoved = 0, totalScanned = 0;
+    let combinedMeta = null;
+    const failed = [];
+
+    fileTexts.forEach(({name, text})=>{
+      try{
+        const { records, meta, removed, scanned } = parseReport(text, { seenKey });
+        allRecords = allRecords.concat(records);
+        totalRemoved += (removed||0);
+        totalScanned += (scanned||0);
+        if(!combinedMeta && meta) combinedMeta = meta;
+      }catch(e){
+        failed.push(`${name}: ${e.message || 'could not be parsed'}`);
+      }
+    });
+
+    if(!allRecords.length){
+      results.classList.remove('show');
+      showError(failed.length ? failed.join('  •  ') : 'No registrant rows found in the selected file(s).');
+      return;
     }
-    file.text().then(run).catch(()=>{
+
+    finalize(allRecords, combinedMeta, totalRemoved, totalScanned);
+
+    if(fileTexts.length > 1){
+      showToast(`${fileTexts.length} files merged → ${allRecords.length.toLocaleString()} unique link${allRecords.length===1?'':'s'}`);
+    }
+    if(failed.length){
+      showError(`Some file(s) were skipped — ${failed.join('  •  ')}`);
+    }
+  }
+
+  function readFileAsText(file){
+    if(file.text) return file.text();
+    return new Promise((resolve, reject)=>{
       const fr = new FileReader();
-      fr.onload = e => run(e.target.result);
-      fr.onerror = () => showError('Could not read that file.');
+      fr.onload = e => resolve(e.target.result);
+      fr.onerror = () => reject(new Error('Could not read ' + file.name));
       fr.readAsText(file);
     });
   }
 
+  function handleFiles(fileList){
+    const files = Array.from(fileList || []).filter(Boolean);
+    if(!files.length) return;
+
+    const isCsv = f => /\.csv$/i.test(f.name) || f.type==='text/csv';
+    const good = files.filter(isCsv);
+    const bad = files.filter(f=>!isCsv(f));
+
+    if(!good.length){
+      showError('Please use .csv file(s) exported from Zoom.');
+      return;
+    }
+
+    Promise.all(good.map(f => readFileAsText(f).then(text => ({ name: f.name, text }))))
+      .then(fileTexts => {
+        runFiles(fileTexts);
+        if(bad.length){
+          showToast(`Skipped ${bad.length} non-CSV file${bad.length===1?'':'s'}`);
+        }
+      })
+      .catch(e => showError(e.message || 'Could not read one or more files.'));
+  }
+
   // file input + dropzone
   drop.addEventListener('click',()=>fileInput.click());
-  fileInput.addEventListener('change', e=>handleFile(e.target.files[0]));
+  fileInput.addEventListener('change', e=>{ handleFiles(e.target.files); fileInput.value=''; });
   ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
   ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
-  drop.addEventListener('drop',e=>{ if(e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]); });
+  drop.addEventListener('drop',e=>{ if(e.dataTransfer.files.length) handleFiles(e.dataTransfer.files); });
 
   // paste
   pasteBtn.addEventListener('click',()=>{
