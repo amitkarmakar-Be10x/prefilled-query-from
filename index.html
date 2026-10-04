@@ -347,6 +347,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     <div class="stats" id="stats"></div>
 
+    <div class="toolbar" style="margin-bottom:10px">
+      <div class="field" style="flex:1;min-width:240px;max-width:420px">
+        <label class="lbl" for="sessionName">Session name <span class="tag">goes in the “Session” column of the downloaded CSV · leave blank to fill in manually</span></label>
+        <input class="in" id="sessionName" placeholder="e.g. Masterclass – 12 Oct 7 PM" autocomplete="off">
+      </div>
+    </div>
+
     <div class="toolbar">
       <div class="search"><span class="si">⌕</span><input id="filter" placeholder="Filter by name, email or phone…"></div>
       <button class="btn btn-primary" id="dlWati">⬇ Download WATI CSV</button>
@@ -746,17 +753,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   $('#dlWati').addEventListener('click',()=>{
     const c = cfg();
-    const head = 'Name,CountryCode,Phone,AllowBroadcast,AllowSMS,formlink';
+    const head = 'Name,CountryCode,Phone,AllowBroadcast,AllowSMS,formlink,session';
+    const sess = $('#sessionName').value.trim();
     const lines = RECORDS.map(r =>
-      [ csvField(''), csvField(c.cc), csvField(r.phone), csvField('TRUE'), csvField('TRUE'), csvField(r.link) ].join(',')
+      [ csvField(''), csvField(c.cc), csvField(r.phone), csvField('TRUE'), csvField('TRUE'), csvField(r.link), csvField(sess) ].join(',')
     );
     downloadSmart(head, lines, 'WATI_'+fileStub(), 'WATI CSV');
   });
 
   $('#dlLinks').addEventListener('click',()=>{
-    const head = 'Name,Email,Phone,formlink';
+    const head = 'Name,Email,Phone,formlink,session';
+    const sess = $('#sessionName').value.trim();
     const lines = RECORDS.map(r =>
-      [ csvField(r.name), csvField(r.email), csvField(r.phone), csvField(r.link) ].join(',')
+      [ csvField(r.name), csvField(r.email), csvField(r.phone), csvField(r.link), csvField(sess) ].join(',')
     );
     downloadSmart(head, lines, 'Links_'+fileStub(), 'Links CSV');
   });
