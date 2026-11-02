@@ -50,6 +50,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     --accent-soft:rgba(255,138,76,.14);
     --accent-line:rgba(255,138,76,.5);
     --teal:#3dd7b0;
+    --gold:#e8c76a;
+    --gold-soft:rgba(232,199,106,.10);
+    --gold-line:rgba(232,199,106,.45);
     --teal-soft:rgba(61,215,176,.13);
     --danger:#ff6b6b;
     --radius:16px;
@@ -134,6 +137,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   .switch input:checked + .slider:before{transform:translateX(18px);background:var(--accent)}
   .toggle-row .t-txt{font-size:13px;color:var(--text)}
   .toggle-row .t-sub{font-size:11.5px;color:var(--muted)}
+
+
+  /* ---------- priority row ---------- */
+  .priority{margin-top:18px;background:linear-gradient(180deg,rgba(232,199,106,.07),rgba(232,199,106,.025));backdrop-filter:blur(22px) saturate(150%);-webkit-backdrop-filter:blur(22px) saturate(150%);border:1px solid rgba(232,199,106,.28);border-radius:var(--radius);padding:18px 20px 20px}
+  .priority .p-title{font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--gold);margin-bottom:14px}
+  .p-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 18px}
+  @media(max-width:760px){.p-grid{grid-template-columns:1fr}}
+  .priority label.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.07em}
+  .priority input.in{border-color:rgba(232,199,106,.22)}
+  .priority input.in:focus{border-color:var(--gold-line);box-shadow:0 0 0 3px var(--gold-soft)}
+  tbody tr.prio{background:var(--gold-soft)}
+  tbody tr.prio td:first-child{box-shadow:inset 3px 0 0 var(--gold)}
+  tbody tr.prio:hover{background:rgba(232,199,106,.14)}
+  .star{color:var(--gold)}
 
   /* ---------- tabs / input ---------- */
   .tabs{display:inline-flex;gap:4px;background:var(--surface-3);border:1px solid var(--line);border-radius:11px;padding:4px;margin-bottom:16px}
@@ -307,6 +324,25 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     </div>
   </details>
 
+  <!-- PRIORITY ROW -->
+  <div class="priority reveal" style="animation-delay:.11s">
+    <div class="p-title">★ Priority row — always inserted as row #1 in output</div>
+    <div class="p-grid">
+      <div class="field">
+        <label class="lbl" for="prioName">Full name</label>
+        <input class="in" id="prioName" placeholder="e.g. Rahul Sharma" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="lbl" for="prioPhone">Phone number</label>
+        <input class="in" id="prioPhone" placeholder="e.g. 9876543210" inputmode="tel" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="lbl" for="prioEmail">Email address</label>
+        <input class="in" id="prioEmail" placeholder="e.g. name@example.com" inputmode="email" autocomplete="off">
+      </div>
+    </div>
+  </div>
+
   <!-- INPUT -->
   <div class="card reveal" style="animation-delay:.14s;margin-top:18px">
     <div class="tabs">
@@ -411,6 +447,52 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   let META = null;
   let REMOVED = 0;
   let SCANNED = 0;
+
+  // ---------- priority row (always row #1 in every output) ----------
+  const prioName = $('#prioName'), prioPhone = $('#prioPhone'), prioEmail = $('#prioEmail');
+
+  function priorityRecord(){
+    const rawName = prioName.value.trim().replace(/\s+/g,' ');
+    const email = prioEmail.value.trim();
+    const phone = normPhone(prioPhone.value);
+    if(!rawName && !email && !phone) return null;           // nothing typed -> no priority row
+    const c = cfg();
+    const name = c.nameMode==='first' ? rawName.split(' ')[0] : rawName;
+    return { name, email, phone, link: buildLink(c, name, email, phone), priority:true };
+  }
+
+  function dedupeKeyOf(r, mode){
+    if(mode==='email') return (r.email||'').toLowerCase().trim();
+    if(mode==='both')  return ((r.phone||'') + '|' + (r.email||'').toLowerCase()).trim();
+    return (r.phone||'').trim();
+  }
+
+  // priority row first, then everything from the report.
+  // If dedupe is on, a report row for the same contact is dropped so they aren't listed twice.
+  function allRecords(){
+    const pr = priorityRecord();
+    if(!pr) return RECORDS;
+    const c = cfg();
+    let rest = RECORDS;
+    if(c.dedupe){
+      const k = dedupeKeyOf(pr, c.dedupeKey);
+      if(k && k !== '|') rest = RECORDS.filter(r => dedupeKeyOf(r, c.dedupeKey) !== k);
+    }
+    return [pr].concat(rest);
+  }
+
+  function refreshIfShown(){
+    if(results.classList.contains('show')){ renderStats(); renderTable(); }
+  }
+  [prioName, prioPhone, prioEmail].forEach(el => el.addEventListener('input', ()=>{
+    clearTimeout(refreshIfShown._t);
+    refreshIfShown._t = setTimeout(refreshIfShown, 150);
+  }));
+  ['cfgBase','cfgName','cfgEmail','cfgPhone','cfgNameMode','cfgDedupe','cfgDedupeKey','cfgEnc'].forEach(id=>{
+    const el = $('#'+id);
+    el.addEventListener('input', refreshIfShown);
+    el.addEventListener('change', refreshIfShown);
+  });
 
   // ---------- tabs ----------
   document.querySelectorAll('.tab').forEach(t=>{
@@ -611,9 +693,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   function renderStats(){
-    const total = RECORDS.length;
-    const withEmail = RECORDS.filter(r=>r.email).length;
-    const withPhone = RECORDS.filter(r=>r.phone && r.phone.length>=10).length;
+    const ALL = allRecords();
+    const total = ALL.length;
+    const withEmail = ALL.filter(r=>r.email).length;
+    const withPhone = ALL.filter(r=>r.phone && r.phone.length>=10).length;
     statsEl.innerHTML = `
       <div class="stat"><div class="v" data-c="${total}">0</div><div class="k">unique links</div></div>
       <div class="stat ${REMOVED>0?'':'dim'}"><div class="v" data-c="${REMOVED}">0</div><div class="k">duplicates removed</div></div>
@@ -627,16 +710,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   function renderTable(){
+    const ALL = allRecords();
     const q = filterInput.value.trim().toLowerCase();
-    const filtered = q ? RECORDS.filter(r =>
+    const filtered = q ? ALL.filter(r =>
       (r.name||'').toLowerCase().includes(q) ||
       (r.email||'').toLowerCase().includes(q) ||
-      (r.phone||'').includes(q)) : RECORDS;
+      (r.phone||'').includes(q)) : ALL;
 
     const slice = filtered.slice(0, PREVIEW_LIMIT);
     tbody.innerHTML = slice.map((r,i)=>`
-      <tr>
-        <td class="nm" title="${escapeHtml(r.name)}">${escapeHtml(r.name)||'<span style="color:var(--muted-2)">—</span>'}</td>
+      <tr class="${r.priority?'prio':''}">
+        <td class="nm" title="${escapeHtml(r.name)}">${r.priority?'<span class="star">★</span> ':''}${escapeHtml(r.name)||'<span style="color:var(--muted-2)">—</span>'}</td>
         <td class="em" title="${escapeHtml(r.email)}">${escapeHtml(r.email)||'—'}</td>
         <td class="ph">${escapeHtml(r.phone)||'<span style="color:var(--danger)">—</span>'}</td>
         <td class="lk">
@@ -656,9 +740,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     const shown = slice.length, totalF = filtered.length;
     tblFoot.textContent = q
-      ? `Showing ${shown.toLocaleString()} of ${totalF.toLocaleString()} matching (${RECORDS.length.toLocaleString()} total)`
-      : (RECORDS.length>PREVIEW_LIMIT
-          ? `Preview: first ${shown.toLocaleString()} of ${RECORDS.length.toLocaleString()} — the download contains all ${RECORDS.length.toLocaleString()}`
+      ? `Showing ${shown.toLocaleString()} of ${totalF.toLocaleString()} matching (${ALL.length.toLocaleString()} total)`
+      : (ALL.length>PREVIEW_LIMIT
+          ? `Preview: first ${shown.toLocaleString()} of ${ALL.length.toLocaleString()} — the download contains all ${ALL.length.toLocaleString()}`
           : `${shown.toLocaleString()} rows`);
   }
 
@@ -755,7 +839,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     const c = cfg();
     const head = 'Name,CountryCode,Phone,AllowBroadcast,AllowSMS,formlink,session';
     const sess = $('#sessionName').value.trim();
-    const lines = RECORDS.map(r =>
+    const lines = allRecords().map(r =>
       [ csvField(''), csvField(c.cc), csvField(r.phone), csvField('TRUE'), csvField('TRUE'), csvField(r.link), csvField(sess) ].join(',')
     );
     downloadSmart(head, lines, 'WATI_'+fileStub(), 'WATI CSV');
@@ -764,15 +848,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   $('#dlLinks').addEventListener('click',()=>{
     const head = 'Name,Email,Phone,formlink,session';
     const sess = $('#sessionName').value.trim();
-    const lines = RECORDS.map(r =>
+    const lines = allRecords().map(r =>
       [ csvField(r.name), csvField(r.email), csvField(r.phone), csvField(r.link), csvField(sess) ].join(',')
     );
     downloadSmart(head, lines, 'Links_'+fileStub(), 'Links CSV');
   });
 
   $('#copyAll').addEventListener('click',()=>{
-    copyText(RECORDS.map(r=>r.link).join('\n'));
-    showToast('All '+RECORDS.length.toLocaleString()+' links copied');
+    copyText(allRecords().map(r=>r.link).join('\n'));
+    showToast('All '+allRecords().length.toLocaleString()+' links copied');
   });
 
   // ---------- run ----------
