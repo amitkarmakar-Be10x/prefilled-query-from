@@ -77,10 +77,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /* ---------- atmosphere ---------- */
   #bgCanvas{position:fixed;inset:0;z-index:0;pointer-events:none;width:100%;height:100%;display:block}
   .aurora{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;contain:strict}
-  .blob{position:absolute;border-radius:50%;filter:blur(100px);opacity:.42;mix-blend-mode:screen;will-change:transform}
-  .blob.b1{width:50vw;height:50vw;background:radial-gradient(circle,#ff8a4c 0%,transparent 65%);top:-16vw;left:-10vw;animation:drift1 26s ease-in-out infinite}
-  .blob.b2{width:44vw;height:44vw;background:radial-gradient(circle,#3dd7b0 0%,transparent 65%);bottom:-18vw;right:-12vw;opacity:.3;animation:drift2 32s ease-in-out infinite}
-  .blob.b3{width:32vw;height:32vw;background:radial-gradient(circle,#7a5cff 0%,transparent 65%);top:38%;left:52%;opacity:.2;animation:drift3 38s ease-in-out infinite}
+  .blob{position:absolute;border-radius:50%;opacity:.30;mix-blend-mode:screen;will-change:transform}
+  .blob.b1{width:50vw;height:50vw;background:radial-gradient(circle,#ff3b30 0%,transparent 68%);top:-16vw;left:-10vw;animation:drift1 26s ease-in-out infinite}
+  .blob.b2{width:44vw;height:44vw;background:radial-gradient(circle,#5fd8ff 0%,transparent 68%);bottom:-18vw;right:-12vw;opacity:.22;animation:drift2 32s ease-in-out infinite}
+  .blob.b3{width:32vw;height:32vw;background:radial-gradient(circle,#e8c76a 0%,transparent 68%);top:38%;left:52%;opacity:.14;animation:drift3 38s ease-in-out infinite}
   @keyframes drift1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(6vw,8vh) scale(1.12)}}
   @keyframes drift2{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-7vw,-6vh) scale(1.15)}}
   @keyframes drift3{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(-5vw,5vh) scale(.9)}}
@@ -102,7 +102,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   .badge{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--teal);background:var(--teal-soft);border:1px solid rgba(61,215,176,.28);padding:6px 12px;border-radius:999px}
   .badge .dot{width:6px;height:6px;border-radius:50%;background:var(--teal);box-shadow:0 0 10px var(--teal);animation:pulse 2.4s ease-in-out infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-  h1{font-family:var(--display);font-weight:800;font-size:clamp(34px,5.4vw,56px);line-height:1.02;letter-spacing:-.02em;margin:18px 0 8px}
+  h1{font-family:var(--display);font-weight:800;font-size:clamp(34px,5.4vw,56px);line-height:1.02;letter-spacing:-.02em;margin:0 0 8px}
   h1 .ink{color:var(--accent)}
   .sub{color:var(--muted);font-size:16px;max-width:620px}
   .sub b{color:var(--text);font-weight:600}
@@ -259,7 +259,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 <div class="wrap">
 
   <header class="reveal" style="animation-delay:.02s">
-    <span class="badge"><span class="dot"></span>100% in your browser · no API key · nothing uploaded</span>
     <h1>Prefill Link <span class="ink">Forge</span></h1>
     <p class="sub">Drop a <b>Zoom registration report</b> and instantly get a WATI-ready CSV with <b>pre-filled Google Form links</b> for every registrant — name, email and phone baked into each URL.</p>
   </header>
@@ -968,150 +967,448 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 })();
 </script>
 <script>
-/* ---------- animated background: connected particle network, 60fps ---------- */
+/* ---------- IRON MAN HUD background — 60fps canvas engine ----------
+   Layers: hex grid + pulse waves · arc reactor (coils, rings, sweep, core) ·
+   sparks · scan line · cursor targeting reticle · corner HUD readouts.
+   Performance notes:
+   - all static art (grid, brackets, rulers, reactor rings/coils/sweep) is pre-rendered
+     ONCE to offscreen sprites; each frame only rotates/blits them (no shadowBlur, no per-frame gradients)
+   - hex highlights are bucketed by alpha so each bucket is ONE stroked path
+   - frame pacing is a drift-free 60fps schedule (works on 60/90/120/144Hz displays);
+     motion is driven by real elapsed time, so speed stays identical if a frame is late
+*/
 (function(){
   "use strict";
   var canvas = document.getElementById('bgCanvas');
   if (!canvas) return;
   var ctx = canvas.getContext('2d');
+  if (!ctx) return;
   var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  var W = 0, H = 0, DPR = Math.min(window.devicePixelRatio || 1, 2);
-  var particles = [];
-  var mouse = { x: -9999, y: -9999, active: false };
-  var colors = ['255,138,76', '61,215,176', '122,92,255', '255,210,76'];
-  var running = true;
-  var last = 0;
-  var FRAME_MS = 1000 / 60; // hard cap at 60fps regardless of display refresh rate
+  /* palette (r,g,b) — arc-reactor cyan, armour gold, armour red */
+  var CY = '95,220,255', GD = '232,199,106', RD = '255,74,60';
+  var TAU = Math.PI * 2, SQ3 = Math.sqrt(3);
+  var FRAME_MS = 1000 / 60;
 
-  function count(){
-    // scale particle density to screen area, capped for perf on small/large screens
-    var area = W * H;
-    return Math.max(28, Math.min(90, Math.round(area / 22000)));
+  var DPR = 1, W = 0, H = 0;
+  var cx = 0, cy = 0, R = 100;                // reactor centre + radius (device px)
+  var gridLayer = null;                       // offscreen: hex grid + brackets + rulers
+  var sprRing = null, sprCoil = null, sprTri = null, sprSweep = null;
+  var glowGrad = null, coreGrad = null, scanGrad = null;
+  var hexX = null, hexY = null, hexD = null, hexN = 0, HS = 30, hxo = [], hyo = [];
+  var sparks = [];
+  var mouse = { x: -9999, y: -9999, rx: -9999, ry: -9999, active: false };
+  var fpsShown = 60, fpsFrames = 0, fpsT0 = 0;
+  var blasts = [], bursts = [], kick = 0, spin = 0;     // click effects
+  var BLAST_DUR = 1.15, BURST_LIFE = 0.85;
+  var burstCols = ['rgb(' + GD + ')', 'rgb(' + RD + ')', 'rgb(' + CY + ')', 'rgb(255,255,255)'];
+  var font = '';
+
+  function mk(w, h){
+    var c = document.createElement('canvas');
+    c.width = Math.max(2, Math.ceil(w)); c.height = Math.max(2, Math.ceil(h));
+    return c;
+  }
+  function hexPath(g, x, y){
+    g.moveTo(x + hxo[0], y + hyo[0]);
+    for (var k = 1; k < 6; k++) g.lineTo(x + hxo[k], y + hyo[k]);
+    g.closePath();
   }
 
-  function resize(){
-    W = canvas.width = Math.round(window.innerWidth * DPR);
-    H = canvas.height = Math.round(window.innerHeight * DPR);
-    canvas.style.width = window.innerWidth + 'px';
-    canvas.style.height = window.innerHeight + 'px';
-    seed();
-  }
+  /* ---------- build everything that never changes between frames ---------- */
+  function build(){
+    var cw = window.innerWidth, ch = window.innerHeight;
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.width = Math.round(cw * DPR);
+    H = canvas.height = Math.round(ch * DPR);
+    canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
+    font = (10 * DPR) + 'px "JetBrains Mono",ui-monospace,Menlo,monospace';
 
-  function seed(){
-    var n = count();
-    particles = [];
-    for (var i = 0; i < n; i++){
-      var speed = (0.15 + Math.random() * 0.35) * DPR;
-      var angle = Math.random() * Math.PI * 2;
-      particles.push({
-        x: Math.random() * W,
-        y: Math.random() * H,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        r: (1 + Math.random() * 1.8) * DPR,
-        c: colors[i % colors.length]
-      });
+    var narrow = cw < 760;
+    cx = narrow ? W * 0.5  : W * 0.80;
+    cy = narrow ? H * 0.30 : H * 0.40;
+    R  = Math.min(narrow ? cw * 0.42 : cw * 0.22, ch * 0.32, 290) * DPR;
+
+    /* hex grid (flat-top) */
+    HS = 30 * DPR;
+    hxo = []; hyo = [];
+    for (var k = 0; k < 6; k++){ hxo.push(HS * Math.cos(k * Math.PI / 3)); hyo.push(HS * Math.sin(k * Math.PI / 3)); }
+    var stepX = HS * 1.5, stepY = HS * SQ3;
+    var cols = Math.ceil(W / stepX) + 2, rows = Math.ceil(H / stepY) + 2;
+    var total = cols * rows;
+    hexX = new Float32Array(total); hexY = new Float32Array(total); hexD = new Float32Array(total);
+    hexN = 0;
+    for (var i = -1; i < cols - 1; i++){
+      for (var j = -1; j < rows - 1; j++){
+        var x = i * stepX, y = j * stepY + ((i & 1) ? stepY / 2 : 0);
+        hexX[hexN] = x; hexY[hexN] = y; hexD[hexN] = Math.hypot(x - cx, y - cy); hexN++;
+      }
     }
+
+    /* static layer: grid + corner brackets + edge rulers */
+    gridLayer = mk(W, H);
+    var g = gridLayer.getContext('2d');
+    g.lineWidth = 0.8 * DPR; g.strokeStyle = 'rgba(' + CY + ',.055)';
+    g.beginPath();
+    for (var n = 0; n < hexN; n++) hexPath(g, hexX[n], hexY[n]);
+    g.stroke();
+
+    var m = 16 * DPR, L = 30 * DPR;
+    g.lineWidth = 1.6 * DPR; g.strokeStyle = 'rgba(' + GD + ',.5)'; g.lineCap = 'square';
+    g.beginPath();
+    g.moveTo(m, m + L); g.lineTo(m, m); g.lineTo(m + L, m);
+    g.moveTo(W - m - L, m); g.lineTo(W - m, m); g.lineTo(W - m, m + L);
+    g.moveTo(m, H - m - L); g.lineTo(m, H - m); g.lineTo(m + L, H - m);
+    g.moveTo(W - m - L, H - m); g.lineTo(W - m, H - m); g.lineTo(W - m, H - m - L);
+    g.stroke();
+    g.lineWidth = 1 * DPR; g.strokeStyle = 'rgba(' + CY + ',.22)';
+    g.beginPath();
+    var tk = 0;
+    for (var yy = m + L + 20 * DPR; yy < H - m - L - 10 * DPR; yy += 14 * DPR, tk++){
+      var len = (tk % 5 === 0 ? 9 : 4) * DPR;
+      g.moveTo(m, yy); g.lineTo(m + len, yy);
+    }
+    tk = 0;
+    for (var xx = m + L + 20 * DPR; xx < W - m - L - 10 * DPR; xx += 14 * DPR, tk++){
+      var len2 = (tk % 5 === 0 ? 9 : 4) * DPR;
+      g.moveTo(xx, m); g.lineTo(xx, m + len2);
+    }
+    g.stroke();
+
+    buildReactor();
+
+    /* cached gradients (origin-relative, drawn after translate) */
+    var gr = R * 1.3;
+    glowGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, gr);
+    glowGrad.addColorStop(0,   'rgba(' + CY + ',.50)');
+    glowGrad.addColorStop(.30, 'rgba(' + CY + ',.16)');
+    glowGrad.addColorStop(.65, 'rgba(' + CY + ',.05)');
+    glowGrad.addColorStop(1,   'rgba(' + CY + ',0)');
+    var cr = R * 0.26;
+    coreGrad = ctx.createRadialGradient(0, 0, 0, 0, 0, cr);
+    coreGrad.addColorStop(0,   'rgba(255,255,255,1)');
+    coreGrad.addColorStop(.28, 'rgba(210,246,255,.95)');
+    coreGrad.addColorStop(.62, 'rgba(' + CY + ',.55)');
+    coreGrad.addColorStop(1,   'rgba(' + CY + ',0)');
+    var sh = 90 * DPR;
+    scanGrad = ctx.createLinearGradient(0, 0, 0, sh);
+    scanGrad.addColorStop(0,   'rgba(' + CY + ',0)');
+    scanGrad.addColorStop(.88, 'rgba(' + CY + ',.07)');
+    scanGrad.addColorStop(1,   'rgba(' + CY + ',.30)');
+
+    /* sparks */
+    var cnt = Math.max(26, Math.min(70, Math.round(W * H / (26000 * DPR * DPR))));
+    sparks = [];
+    var cols3 = [CY, GD, RD];
+    for (var s = 0; s < cnt; s++){
+      var sp = (14 + Math.random() * 34) * DPR, an = Math.random() * TAU;
+      sparks.push({ x: Math.random() * W, y: Math.random() * H, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp,
+                    grp: s % 3 === 0 ? 0 : (s % 3 === 1 ? 1 : 2) });
+    }
+    sparks.cols = cols3;
   }
 
-  var LINK_DIST = 150; // css px, scaled by DPR below
+  /* pre-rendered, rotatable reactor parts (each centred in its own square sprite) */
+  function buildReactor(){
+    var S = Math.ceil(R * 2.2), c = S / 2, g;
 
-  function step(dt){
-    var linkDist = LINK_DIST * DPR;
-    var linkDist2 = linkDist * linkDist;
+    sprRing = mk(S, S); g = sprRing.getContext('2d'); g.translate(c, c);
+    g.lineWidth = 1.6 * DPR; g.strokeStyle = 'rgba(' + CY + ',.55)';
+    g.beginPath(); g.arc(0, 0, R, 0, TAU); g.stroke();
+    g.lineWidth = 1 * DPR; g.strokeStyle = 'rgba(' + CY + ',.28)';
+    g.beginPath(); g.arc(0, 0, R * 0.90, 0, TAU); g.stroke();
+    g.strokeStyle = 'rgba(' + CY + ',.5)'; g.beginPath();
+    for (var i = 0; i < 90; i++){
+      var a = i / 90 * TAU, r1 = R * 0.90, r2 = R * (i % 5 === 0 ? 0.99 : 0.95);
+      g.moveTo(Math.cos(a) * r1, Math.sin(a) * r1); g.lineTo(Math.cos(a) * r2, Math.sin(a) * r2);
+    }
+    g.stroke();
+    g.strokeStyle = 'rgba(' + GD + ',.7)'; g.lineWidth = 2.2 * DPR; g.beginPath();
+    for (var q = 0; q < 4; q++){ g.arc(0, 0, R * 1.04, q * Math.PI / 2 + 0.12, q * Math.PI / 2 + 0.62); g.moveTo(Math.cos((q + 1) * Math.PI / 2 + 0.12) * R * 1.04, Math.sin((q + 1) * Math.PI / 2 + 0.12) * R * 1.04); }
+    g.stroke();
 
-    for (var i = 0; i < particles.length; i++){
-      var p = particles[i];
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
+    /* 10 reactor coil segments */
+    sprCoil = mk(S, S); g = sprCoil.getContext('2d'); g.translate(c, c);
+    var ri = R * 0.46, ro = R * 0.70, N = 10, span = TAU / N, gap = 0.16;
+    g.lineWidth = 1.4 * DPR; g.lineJoin = 'round';
+    for (var s = 0; s < N; s++){
+      var a0 = s * span + gap / 2, a1 = (s + 1) * span - gap / 2;
+      g.beginPath();
+      g.arc(0, 0, ro, a0, a1); g.lineTo(Math.cos(a1) * ri, Math.sin(a1) * ri);
+      g.arc(0, 0, ri, a1, a0, true); g.closePath();
+      g.fillStyle = 'rgba(' + CY + ',.08)'; g.fill();
+      g.strokeStyle = 'rgba(' + CY + ',.62)'; g.stroke();
+      var am = (a0 + a1) / 2;                      /* copper-wire centre line */
+      g.beginPath(); g.moveTo(Math.cos(am) * ri * 1.04, Math.sin(am) * ri * 1.04); g.lineTo(Math.cos(am) * ro * 0.96, Math.sin(am) * ro * 0.96);
+      g.strokeStyle = 'rgba(' + GD + ',.45)'; g.lineWidth = 1 * DPR; g.stroke(); g.lineWidth = 1.4 * DPR;
+    }
 
+    /* counter-rotating gold triangles */
+    sprTri = mk(S, S); g = sprTri.getContext('2d'); g.translate(c, c);
+    g.lineWidth = 1.6 * DPR; g.lineJoin = 'round'; g.strokeStyle = 'rgba(' + GD + ',.75)';
+    var tr = R * 0.40;
+    g.beginPath();
+    for (var t = 0; t < 3; t++){ var ta = -Math.PI / 2 + t * TAU / 3; g[t ? 'lineTo' : 'moveTo'](Math.cos(ta) * tr, Math.sin(ta) * tr); }
+    g.closePath(); g.stroke();
+    g.strokeStyle = 'rgba(' + RD + ',.6)'; g.lineWidth = 1.2 * DPR; g.beginPath();
+    for (var u = 0; u < 3; u++){ var ua = Math.PI / 2 + u * TAU / 3; g[u ? 'lineTo' : 'moveTo'](Math.cos(ua) * tr * 0.62, Math.sin(ua) * tr * 0.62); }
+    g.closePath(); g.stroke();
+
+    /* radar sweep: fading fan + bright leading edge (angle 0 = leading edge) */
+    sprSweep = mk(S, S); g = sprSweep.getContext('2d'); g.translate(c, c);
+    var SL = 34, fan = 1.15;
+    for (var f = 0; f < SL; f++){
+      var k0 = -fan + f * fan / SL, k1 = -fan + (f + 1) * fan / SL;
+      g.beginPath(); g.moveTo(0, 0); g.arc(0, 0, R * 0.98, k0, k1 + 0.004); g.closePath();
+      var al = Math.pow((f + 1) / SL, 2.2) * 0.30;
+      g.fillStyle = 'rgba(' + CY + ',' + al.toFixed(3) + ')'; g.fill();
+    }
+    g.strokeStyle = 'rgba(190,245,255,.75)'; g.lineWidth = 1.4 * DPR;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(R * 0.98, 0); g.stroke();
+  }
+
+  /* ---------- per-frame drawing ---------- */
+  var HEX_B = 5, bucketW = [[],[],[],[],[]], bucketM = [[],[],[],[],[]];
+  var wStyle = [], mStyle = [];
+  for (var bi = 0; bi < HEX_B; bi++){
+    wStyle.push('rgba(' + CY + ',' + (0.07 + bi * 0.075).toFixed(3) + ')');
+    mStyle.push('rgba(' + GD + ',' + (0.09 + bi * 0.085).toFixed(3) + ')');
+  }
+
+  function blit(img, x, y, rot){
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.drawImage(img, -img.width / 2, -img.height / 2);
+    ctx.restore();
+  }
+
+  function draw(t, dt){
+    var i, b;
+    ctx.clearRect(0, 0, W, H);
+    ctx.drawImage(gridLayer, 0, 0);
+
+    /* --- hex pulse waves radiating from the reactor + gold glow under the cursor --- */
+    var maxR = Math.hypot(Math.max(cx, W - cx), Math.max(cy, H - cy)) + 120 * DPR;
+    var period = 5.2, band = 70 * DPR;
+    var w1 = ((t % period) / period) * maxR, w2 = (((t + period / 2) % period) / period) * maxR;
+    var mr = 120 * DPR, mr2 = mr * mr, useM = mouse.active;
+    var bi2, bl;
+    for (bi2 = blasts.length - 1; bi2 >= 0; bi2--){
+      bl = blasts[bi2]; bl.p = (t - bl.t0) / BLAST_DUR;
+      if (bl.p >= 1){ blasts.splice(bi2, 1); continue; }
+      var e = 1 - Math.pow(1 - bl.p, 3);                 // ease-out
+      bl.r = e * 300 * DPR; bl.a = 1 - bl.p; bl.band = 46 * DPR;
+    }
+    kick *= Math.exp(-dt * 3.2); spin += kick * dt * 2.4;
+    for (b = 0; b < HEX_B; b++){ bucketW[b].length = 0; bucketM[b].length = 0; }
+    for (i = 0; i < hexN; i++){
+      var d = hexD[i], df = Math.min(Math.abs(d - w1), Math.abs(d - w2));
+      if (df < band){
+        var fall = 1 - Math.min(d, maxR) / maxR * 0.55;
+        var bw = ((1 - df / band) * fall * HEX_B) | 0; if (bw > HEX_B - 1) bw = HEX_B - 1;
+        bucketW[bw].push(i);
+      }
+      if (useM){
+        var dx = hexX[i] - mouse.rx, dy = hexY[i] - mouse.ry, dd = dx * dx + dy * dy;
+        if (dd < mr2){ var bm = ((1 - Math.sqrt(dd) / mr) * HEX_B) | 0; if (bm > HEX_B - 1) bm = HEX_B - 1; bucketM[bm].push(i); }
+      }
+      for (var q = 0; q < blasts.length; q++){
+        var bk = blasts[q], bx = hexX[i] - bk.x, by = hexY[i] - bk.y;
+        var dfb = Math.abs(Math.sqrt(bx * bx + by * by) - bk.r);
+        if (dfb < bk.band){ var bb = ((1 - dfb / bk.band) * bk.a * HEX_B * 1.4) | 0; if (bb > HEX_B - 1) bb = HEX_B - 1; bucketM[bb].push(i); }
+      }
+    }
+    ctx.lineWidth = 1.1 * DPR;
+    for (b = 0; b < HEX_B; b++){
+      var arr = bucketW[b]; if (!arr.length) continue;
+      ctx.strokeStyle = wStyle[b]; ctx.beginPath();
+      for (i = 0; i < arr.length; i++) hexPath(ctx, hexX[arr[i]], hexY[arr[i]]);
+      ctx.stroke();
+    }
+    for (b = 0; b < HEX_B; b++){
+      var am = bucketM[b]; if (!am.length) continue;
+      ctx.strokeStyle = mStyle[b]; ctx.beginPath();
+      for (i = 0; i < am.length; i++) hexPath(ctx, hexX[am[i]], hexY[am[i]]);
+      ctx.stroke();
+    }
+
+    /* --- arc reactor --- */
+    var pulse = 0.86 + 0.14 * Math.sin(t * 2.4);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(cx, cy); ctx.globalAlpha = Math.min(1, pulse * 0.9 + kick * 0.35); ctx.fillStyle = glowGrad;
+    var gg = R * 1.3; ctx.fillRect(-gg, -gg, gg * 2, gg * 2);
+    ctx.restore();
+
+    ctx.globalAlpha = 0.95;
+    blit(sprRing,  cx, cy,  t * 0.06);
+    blit(sprCoil,  cx, cy, -(t * 0.16 + spin));
+    blit(sprTri,   cx, cy,  t * 0.32);
+    ctx.globalAlpha = 0.85;
+    blit(sprSweep, cx, cy,  t * 1.05);
+    ctx.globalAlpha = 1;
+
+    /* live dashed ring + gold partial arcs */
+    ctx.save(); ctx.translate(cx, cy);
+    ctx.lineWidth = 1.2 * DPR; ctx.strokeStyle = 'rgba(' + CY + ',.38)';
+    ctx.setLineDash([5 * DPR, 9 * DPR]); ctx.lineDashOffset = -t * 26 * DPR;
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.80, 0, TAU); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2.4 * DPR; ctx.strokeStyle = 'rgba(' + GD + ',.8)'; ctx.lineCap = 'round';
+    var ra = t * 0.9; ctx.beginPath();
+    for (i = 0; i < 3; i++){ var a0 = ra + i * TAU / 3; ctx.moveTo(Math.cos(a0) * R * 0.33, Math.sin(a0) * R * 0.33); ctx.arc(0, 0, R * 0.33, a0, a0 + 0.9); }
+    ctx.stroke();
+    ctx.lineWidth = 1.4 * DPR; ctx.strokeStyle = 'rgba(' + CY + ',.85)';
+    ctx.beginPath(); ctx.arc(0, 0, R * 0.245, 0, TAU); ctx.stroke();
+    ctx.restore();
+
+    /* core */
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    ctx.translate(cx, cy); ctx.globalAlpha = Math.min(1, pulse + 0.1 + kick * 0.3); ctx.fillStyle = coreGrad;
+    var cc = R * 0.26; ctx.fillRect(-cc, -cc, cc * 2, cc * 2);
+    ctx.restore();
+
+    /* --- sparks (batched: one path per colour) --- */
+    var cols = sparks.cols, grp;
+    for (i = 0; i < sparks.length; i++){
+      var p = sparks[i];
+      p.x += p.vx * dt; p.y += p.vy * dt;
       if (p.x < -20) p.x = W + 20; else if (p.x > W + 20) p.x = -20;
       if (p.y < -20) p.y = H + 20; else if (p.y > H + 20) p.y = -20;
-
-      if (mouse.active){
-        var dx = p.x - mouse.x, dy = p.y - mouse.y;
-        var d2 = dx*dx + dy*dy;
-        var influence = 130 * DPR;
-        if (d2 < influence * influence && d2 > 1){
-          var d = Math.sqrt(d2);
-          var force = (1 - d / influence) * 0.02;
-          p.vx += (dx / d) * force;
-          p.vy += (dy / d) * force;
-        }
-      }
-      // gentle speed damping so mouse pushes don't accumulate forever
-      p.vx *= 0.996; p.vy *= 0.996;
-      var sp = Math.sqrt(p.vx*p.vx + p.vy*p.vy);
-      var minSp = 0.12 * DPR;
-      if (sp < minSp && sp > 0){ p.vx = p.vx / sp * minSp; p.vy = p.vy / sp * minSp; }
     }
-
-    ctx.clearRect(0, 0, W, H);
-
-    // links
-    ctx.lineWidth = 1 * DPR;
-    for (var a = 0; a < particles.length; a++){
-      for (var b = a + 1; b < particles.length; b++){
-        var pa = particles[a], pb = particles[b];
-        var dx2 = pa.x - pb.x, dy2 = pa.y - pb.y;
-        var dist2 = dx2*dx2 + dy2*dy2;
-        if (dist2 < linkDist2){
-          var t = 1 - dist2 / linkDist2;
-          ctx.strokeStyle = 'rgba(' + pa.c + ',' + (t * 0.35).toFixed(3) + ')';
-          ctx.beginPath();
-          ctx.moveTo(pa.x, pa.y);
-          ctx.lineTo(pb.x, pb.y);
-          ctx.stroke();
-        }
-      }
-    }
-
-    // nodes with soft glow
-    for (var j = 0; j < particles.length; j++){
-      var pn = particles[j];
+    ctx.lineCap = 'round'; ctx.lineWidth = 1.7 * DPR;
+    for (grp = 0; grp < 3; grp++){
+      ctx.strokeStyle = 'rgba(' + cols[grp] + ',' + (grp === 0 ? 0.55 : 0.7) + ')';
       ctx.beginPath();
-      ctx.fillStyle = 'rgba(' + pn.c + ',0.9)';
-      ctx.arc(pn.x, pn.y, pn.r, 0, Math.PI * 2);
-      ctx.fill();
+      for (i = 0; i < sparks.length; i++){
+        var s = sparks[i]; if (s.grp !== grp) continue;
+        ctx.moveTo(s.x - s.vx * 0.09, s.y - s.vy * 0.09); ctx.lineTo(s.x, s.y);
+      }
+      ctx.stroke();
     }
+
+    /* --- click: repulsor shockwave + target-lock + spark burst --- */
+    var k2, p2;
+    for (k2 = 0; k2 < blasts.length; k2++){
+      bl = blasts[k2]; p2 = bl.p;
+      ctx.lineCap = 'round';
+      ctx.lineWidth = (3 * (1 - p2) + 0.8) * DPR; ctx.strokeStyle = 'rgba(' + GD + ',' + (0.9 * bl.a).toFixed(3) + ')';
+      ctx.beginPath(); ctx.arc(bl.x, bl.y, bl.r, 0, TAU); ctx.stroke();
+      ctx.lineWidth = (2 * (1 - p2) + 0.6) * DPR; ctx.strokeStyle = 'rgba(' + CY + ',' + (0.7 * bl.a).toFixed(3) + ')';
+      ctx.beginPath(); ctx.arc(bl.x, bl.y, bl.r * 0.72, 0, TAU); ctx.stroke();
+      if (p2 < 0.45){                                   // red lock-on brackets contract onto the point
+        var lp = p2 / 0.45, ld = (62 - 40 * (1 - Math.pow(1 - lp, 3))) * DPR, ll = 11 * DPR;
+        ctx.save(); ctx.translate(bl.x, bl.y); ctx.rotate((1 - lp) * 1.2);
+        ctx.lineWidth = 2 * DPR; ctx.strokeStyle = 'rgba(' + RD + ',' + (1 - lp * 0.6).toFixed(3) + ')'; ctx.beginPath();
+        for (var c4 = 0; c4 < 4; c4++){ ctx.rotate(Math.PI / 2); ctx.moveTo(ld, -ll); ctx.lineTo(ld, 0); ctx.lineTo(ld, 0); ctx.moveTo(ld, 0); ctx.lineTo(ld - ll, 0); }
+        ctx.stroke(); ctx.restore();
+      }
+      if (p2 < 0.22){                                   // white-hot flash at impact
+        ctx.globalAlpha = 1 - p2 / 0.22; ctx.fillStyle = 'rgb(255,255,255)';
+        ctx.beginPath(); ctx.arc(bl.x, bl.y, (6 + 26 * p2 / 0.22) * DPR, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
+      }
+    }
+    if (bursts.length){
+      ctx.lineCap = 'round'; ctx.lineWidth = 2 * DPR;
+      var damp = Math.exp(-dt * 3.2);
+      for (k2 = bursts.length - 1; k2 >= 0; k2--){
+        var bp = bursts[k2], age = (t - bp.t0) / BURST_LIFE;
+        if (age >= 1){ bursts.splice(k2, 1); continue; }
+        bp.x += bp.vx * dt; bp.y += bp.vy * dt; bp.vx *= damp; bp.vy *= damp;
+        ctx.globalAlpha = 1 - age; ctx.strokeStyle = bp.col;
+        ctx.beginPath(); ctx.moveTo(bp.x - bp.vx * 0.06, bp.y - bp.vy * 0.06); ctx.lineTo(bp.x, bp.y); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    /* --- horizontal scan line --- */
+    var sh = 90 * DPR, sy = ((t * 0.09) % 1) * (H + sh * 2) - sh;
+    ctx.save(); ctx.translate(0, sy); ctx.fillStyle = scanGrad; ctx.fillRect(0, 0, W, sh); ctx.restore();
+
+    /* --- cursor targeting reticle --- */
+    if (mouse.active){
+      var rx = mouse.rx, ry = mouse.ry, rr = 22 * DPR;
+      ctx.save(); ctx.translate(rx, ry);
+      ctx.lineWidth = 1.3 * DPR; ctx.strokeStyle = 'rgba(' + GD + ',.85)';
+      ctx.setLineDash([6 * DPR, 5 * DPR]); ctx.lineDashOffset = t * 22 * DPR;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(' + RD + ',.9)'; ctx.beginPath();
+      ctx.rotate(t * 1.4);
+      for (i = 0; i < 4; i++){ ctx.rotate(Math.PI / 2); ctx.moveTo(rr + 3 * DPR, 0); ctx.lineTo(rr + 11 * DPR, 0); }
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = 'rgba(' + CY + ',.9)'; ctx.beginPath(); ctx.arc(rx, ry, 1.8 * DPR, 0, TAU); ctx.fill();
+    }
+
+    /* --- corner HUD readouts --- */
+    ctx.font = font; ctx.textBaseline = 'top';
+    var m = 16 * DPR, tx = m + 40 * DPR, ty = m + 3 * DPR, th = 14 * DPR;
+    ctx.fillStyle = 'rgba(' + GD + ',.72)';
+    ctx.textAlign = 'left';  ctx.fillText('J.A.R.V.I.S. // ONLINE', tx, ty);
+    ctx.fillStyle = 'rgba(' + CY + ',.55)';
+    ctx.fillText('ARC REACTOR  ' + Math.round(96 + 4 * Math.sin(t * 0.7)) + '%', tx, ty + th);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(' + GD + ',.72)';
+    ctx.fillText('MK-85 // HUD', W - tx, ty);
+    ctx.fillStyle = 'rgba(' + CY + ',.55)';
+    ctx.fillText('FPS ' + fpsShown, W - tx, ty + th);
+    ctx.textBaseline = 'bottom'; ctx.textAlign = 'left';
+    ctx.fillText('SYS ' + ((t * 7.3) % 100).toFixed(1).padStart(5, '0') + ' // PREFILL FORGE', tx, H - m - 3 * DPR);
+    ctx.textAlign = 'right';
+    ctx.fillText(mouse.active ? ('X ' + String(Math.round(mouse.x / DPR)).padStart(4, '0') + '  Y ' + String(Math.round(mouse.y / DPR)).padStart(4, '0')) : 'X ----  Y ----', W - tx, H - m - 3 * DPR);
   }
 
-  function drawStaticFrame(){
-    // used for reduced-motion: draw one calm frame, no animation loop
-    step(0);
-  }
-
+  /* ---------- 60fps scheduler ---------- */
+  var running = true, rafId = 0, nextAt = 0, lastTs = 0, T = 0;
   function loop(ts){
     if (!running) return;
-    if (!last) last = ts;
-    var elapsed = ts - last;
-    if (elapsed >= FRAME_MS){
-      last = ts - (elapsed % FRAME_MS);
-      step(elapsed / 16.6667); // normalize motion speed to ~60fps baseline
+    rafId = requestAnimationFrame(loop);
+    if (!nextAt){ nextAt = ts; lastTs = ts; fpsT0 = ts; }
+    if (ts < nextAt - 1.5) return;                 // 90/120/144Hz displays: skip to hold 60fps
+    var dt = (ts - lastTs) / 1000; lastTs = ts;
+    if (dt > 0.1) dt = 0.1;                        // tab was throttled: don't jump
+    nextAt += FRAME_MS; if (nextAt < ts) nextAt = ts + FRAME_MS;
+
+    T += dt;
+    var k = 1 - Math.exp(-dt * 16);                // frame-rate independent cursor easing
+    if (mouse.active){
+      if (mouse.rx < -9000){ mouse.rx = mouse.x; mouse.ry = mouse.y; }
+      mouse.rx += (mouse.x - mouse.rx) * k; mouse.ry += (mouse.y - mouse.ry) * k;
     }
-    requestAnimationFrame(loop);
+    draw(T, dt);
+
+    fpsFrames++;
+    if (ts - fpsT0 >= 500){ fpsShown = Math.min(60, Math.round(fpsFrames * 1000 / (ts - fpsT0))); fpsFrames = 0; fpsT0 = ts; }
   }
+  function start(){ if (rafId) cancelAnimationFrame(rafId); nextAt = 0; lastTs = 0; rafId = requestAnimationFrame(loop); }
 
-  window.addEventListener('resize', resize, { passive: true });
-  window.addEventListener('pointermove', function(e){
-    mouse.x = e.clientX * DPR;
-    mouse.y = e.clientY * DPR;
-    mouse.active = true;
+  var rzT = 0;
+  window.addEventListener('resize', function(){
+    clearTimeout(rzT);
+    rzT = setTimeout(function(){ build(); if (reduceMotion) draw(0.6, 0); }, 120);
   }, { passive: true });
-  window.addEventListener('pointerleave', function(){ mouse.active = false; }, { passive: true });
-
+  window.addEventListener('pointermove', function(e){
+    mouse.x = e.clientX * DPR; mouse.y = e.clientY * DPR; mouse.active = true;
+  }, { passive: true });
+  window.addEventListener('pointerdown', function(e){
+    if (reduceMotion) return;
+    var x = e.clientX * DPR, y = e.clientY * DPR;
+    if (blasts.length > 5) blasts.shift();
+    blasts.push({ x: x, y: y, t0: T, p: 0, r: 0, a: 1, band: 0 });
+    for (var n = 0; n < 18; n++){
+      var an = Math.random() * TAU, sp = (160 + Math.random() * 380) * DPR;
+      bursts.push({ x: x, y: y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp, t0: T, col: burstCols[n & 3] });
+    }
+    if (bursts.length > 160) bursts.splice(0, bursts.length - 160);
+    kick = 1;
+  }, { passive: true });
+  document.addEventListener('mouseleave', function(){ mouse.active = false; mouse.rx = -9999; });
   document.addEventListener('visibilitychange', function(){
     running = !document.hidden;
-    if (running && !reduceMotion){ last = 0; requestAnimationFrame(loop); }
+    if (running && !reduceMotion) start();
   });
 
-  resize();
-  if (reduceMotion){
-    drawStaticFrame();
-  } else {
-    requestAnimationFrame(loop);
-  }
+  build();
+  if (reduceMotion){ draw(0.6, 0); } else { start(); }
 })();
 </script>
 </body>
